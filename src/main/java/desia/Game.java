@@ -1,15 +1,16 @@
 package desia;
 
+import desia.Charater.Player;
 import desia.io.Io;
-import desia.item.Consumables;
+import desia.loader.GameData;
+import desia.loader.GameDataLoader;
 import desia.loader.GameLoad;
 import desia.loader.Ranking;
 
-import java.sql.SQLOutput;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.List;
 
 public class Game {
+    private Player currentPlayer;
 
     public void Start(){
         Io io1 = new Io();
@@ -46,23 +47,40 @@ public class Game {
 
     public void newGame(){
         Io io1 = new Io();
+        GameDataLoader dataLoader = new GameDataLoader();
+        GameData gameData = dataLoader.loadData();
+        List<Player> playables = gameData.getPlayableCharacters();
+
         System.out.println("플레이할 캐릭터를 선택하세요.");
-        System.out.println("1. 전사\n높은 체력과 공격력을 갖춘 전사. 용맹한 심장을 지녔다.");
-        System.out.println("2. 마법사\n체력은 약하지만 강력하고 파괴적인 마법을 구사한다.");
-        System.out.println("3. 암살자\n그림자 속에서 누구보다 빠른 속도로 적을 제압한다.");
-        System.out.println("4. 마검사\n검술 시험에서도, 마도사 시험에서도 떨어진 비운의 전사. 그러나 엄청난 잠재력을 지녔다.");
-        System.out.println("(뒤로가기는 5 입력)");
+        for (int index = 0; index < playables.size(); index++) {
+            Player playable = playables.get(index);
+            System.out.printf(
+                    "%d. %s%n%s%n",
+                    index + 1,
+                    playable.getPlayerName(),
+                    playable.getDescription()
+            );
+        }
+        System.out.printf("(뒤로가기는 %d 입력)%n", playables.size() + 1);
 
-        int input = io1.readInt(">>>",5);
-
-        switch(input){
-            case 1:
-                break;
-            case 2:
-                break;
+        int input = io1.readInt(">>>", playables.size() + 1);
+        if (input == playables.size() + 1) {
+            return;
         }
 
-
+        currentPlayer = playables.get(input - 1);
+        System.out.println("선택한 캐릭터: " + currentPlayer.getPlayerName());
+        System.out.println(currentPlayer.getDescription());
+        System.out.printf(
+                "HP %.1f | MP %.1f | ATK %.1f | MAG %.1f | SPD %.1f | DEF %.1f | MDEF %.1f%n",
+                currentPlayer.getMaxHp(),
+                currentPlayer.getMaxMp(),
+                currentPlayer.getAtk(),
+                currentPlayer.getMagic(),
+                currentPlayer.getSpd(),
+                currentPlayer.getDef(),
+                currentPlayer.getMdef()
+        );
     }
 
 
