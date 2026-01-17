@@ -346,3 +346,731 @@
   * 중보스: 듀란/콘빅트 / 보스: 마왕 앨리스 / 진최종: 슈미트
   * 슈미트는 “33% 깎고 필중 즉사기 연출로 마무리”라는 연출 규칙 명시 
 
+
+
+
+
+# 0) 공통 규칙
+
+## ID 규칙
+
+* 모든 콘텐츠는 `id`로 참조한다. (표시 이름 `name`과 분리)
+* `id`는 영문/숫자/언더스코어 권장: `goblin_shaman`, `skill_fireball` 등
+* **중복 id 금지**, **참조 무결성 필수**(없는 id를 참조하면 로딩 실패)
+
+## 수치 규칙
+
+* `chance`: 0.0 ~ 1.0
+* `duration_turns`: 1 이상 정수
+* 스탯은 기본적으로 `>= 0` (예외: 디버프/패널티는 modifier에서 음수 허용)
+
+## enum(문자열 상수) 목록
+
+* `element`: `neutral | fire | water | air | earth | lightning | arcane`
+* `damage_type`: `physical | magic | true`
+* `skill_category`: `attack | heal | shield | buff | debuff | utility`
+* `target`: `self | enemy | ally | all_enemies | all_allies | random_enemy | random_ally`
+* `tier`: `minion | elite | boss | hidden_boss`
+* `slot`: `helmet | chest | cloak | legs | boots | ring | weapon_1h | weapon_2h`
+
+---
+
+# 1) config.json (전역 룰)
+
+## 목적
+
+* 방어 공식, 원소 상성, 치명타 배율, 링 슬롯 수 등 **밸런스/룰 파라미터를 전부 코드 밖으로**.
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "defense_model": {
+    "type": "CURVE", 
+    "k": 0.02,
+    "min_mult": 0.2
+  },
+  "crit": { "base_chance": 0.05, "mult": 1.5 },
+  "accuracy": { "min_hit": 0.05, "blind_mult": 0.7 },
+  "shield": { "bypass_defense": true },
+  "equipment_rules": { "ring_slots": 2 },
+  "elements": {
+    "multiplier": {
+      "fire": { "water": 0.8, "earth": 1.0, "air": 1.0, "fire": 1.0, "lightning": 1.0, "arcane": 1.0, "neutral": 1.0 },
+      "water": { "fire": 1.2, "earth": 1.2, "lightning": 0.9, "water": 1.0, "air": 1.0, "arcane": 1.0, "neutral": 1.0 },
+      "earth": { "water": 0.8, "lightning": 1.2, "...": 1.0 },
+      "lightning": { "water": 1.2, "earth": 0.8, "...": 1.0 },
+      "air": { "...": 1.0 },
+      "arcane": { "...": 1.0 },
+      "neutral": { "...": 1.0 }
+    }
+  }
+}
+```
+
+### 방어 모델 타입 제안
+
+* `LOL`: `mult = 100/(100+def)` (스케일 큰 게임용)
+* `CURVE`: `mult = max(min_mult, 1/(1 + def*k))` (스케일 작은 게임용 권장)
+* `LINEAR_CAP`: `mult = clamp(1 - def*k, min_mult, 1)`
+
+---
+
+# 2) skills.json
+
+## 목적
+
+* 스킬은 “풀(pool)”이고, 실제 사용 가능 여부는 **개체가 배정받은 스킬 목록**으로 결정.
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "<skill_id>": {
+      "name": "표시명",
+      "description": "플레이버 텍스트",
+      "element": "fire",
+      "category": "attack",
+      "target": "enemy",
+      "mp_cost": 10,
+
+      "components": [
+        {
+          "kind": "damage",
+          "damage_type": "magic",
+          "terms": [
+            { "stat": "constant", "coef": 15 },
+            { "stat": "self_spell_power", "coef": 0.8 }
+          ]
+        }
+      ],
+
+      "status_effects": [
+        { "status": "burn", "target": "enemy", "chance": 0.3, "duration_turns": 3 }
+      ],
+
+      "special_tags": ["TAG_ALWAYS_HIT"]
+    }
+  }
+}
+```
+
+## terms.stat 허용 목록(필수)
+
+* `constant`
+* 자기: `self_attack | self_spell_power | self_defense | self_magic_resist | self_speed | self_hp | self_max_hp | self_missing_hp | self_mp | self_max_mp | self_missing_mp | self_spent_mp`
+* 상대: `target_hp | target_max_hp | target_missing_hp | target_mp | target_max_mp | target_missing_mp | target_defense | target_magic_resist | target_speed`
+
+> 이렇게 해두면 “처형/어벤저/마나버스트” 같은 걸 특수공식 없이 구현 가능.
+
+---
+
+# 3) enemies.json
+
+## 목적
+
+* 적은 “현재 스탯”을 저장하지 않는다.
+* **1레벨 기준 스탯 + 성장률**로 계산한다.
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "enemies": [
+    {
+      "id": "goblin",
+      "name": "고블린",
+      "tier": "minion",
+      "element": "neutral",
+      "base_level": 1,
+
+      "base_stats": {
+        "max_hp": 20, "max_mp": 0,
+        "attack": 2, "spell_power": 0,
+        "defense": 0, "magic_resist": 0,
+        "speed": 3, "crit_chance": 0.02
+      },
+
+      "growth_per_level": {
+        "max_hp": 2.1, "max_mp": 0.2,
+        "attack": 0.3, "spell_power": 0.0,
+        "defense": 0.05, "magic_resist": 0.02,
+        "speed": 0.03
+      },
+
+      "rewards": { "xp": 5, "gold_from_xp_ratio": 0.8 },
+
+      "skill_assignment": {
+        "base": ["skill_scratch"],
+        "by_level": [
+          { "min_level": 10, "add": ["skill_throw_stone"] },
+          { "min_level": 20, "add": ["skill_panic_shout"] }
+        ]
+      },
+
+      "status_resistance": {
+        "panic": { "mult": 1.0 },
+        "freeze": { "mult": 1.0 }
+      }
+    }
+  ]
+}
+```
+
+### status_resistance 규칙
+
+* 기본값(미기재): `mult = 1.0`
+* 보스 정책 예:
+
+  * boss: `panic.mult = 0` (면역)
+  * elite: `panic.mult = 0.5` (확률 반감)
+
+---
+
+# 4) consumables.json
+
+## 목적
+
+* 소모품 효과는 “타입 기반 effect 리스트”로 통일.
+* 후반에도 쓸모 있게 **고정 + % 혼합**을 기본 전략으로.
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "consumables": {
+    "<item_id>": {
+      "name": "소형 체력 포션",
+      "description": "…",
+      "rarity": "common",
+      "price": 30,
+      "sell_ratio": 0.7,
+      "usable_in_battle": true,
+
+      "effects": [
+        { "type": "heal_hp", "flat": 30, "percent_max_hp": 0.2 }
+      ],
+
+      "special_tags": []
+    }
+  }
+}
+```
+
+## effects.type 목록(권장 최소)
+
+* `heal_hp` `{flat, percent_max_hp}`
+* `heal_mp` `{flat, percent_max_mp}`
+* `add_shield` `{flat, percent_max_hp}`
+* `remove_status` `{statuses:[...]}`  // burn/poison/bleed/freeze/stun/panic/blind
+* `apply_status` `{status, chance, duration_turns, target}`
+* `apply_buff` `{duration_turns, modifiers:[{stat, flat, percent}] }`
+* `revive` `{percent_max_hp}` (필요 시)
+* `escape_bonus` `{flat}` 또는 `{mult}`
+* `perm_stats` `{mods:[{stat, flat}]}` (희귀 영구강화)
+* `cast_skill` `{skill_id}` (스크롤류)
+
+---
+
+# 5) equipment.json
+
+## 목적
+
+* 슬롯/스탯 보정/세트/스킬 부여/특수효과를 **전부 데이터화**
+* 장비 고유효과는 `special_tags`로 처리
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "equipment": {
+    "<equip_id>": {
+      "name": "플레임 소드",
+      "description": "…",
+      "rarity": "rare",
+      "slot": "weapon_1h",
+      "price": 220,
+      "sell_ratio": 0.7,
+      "unique": false,
+
+      "stats": {
+        "flat": { "attack": 6, "speed": 1, "max_hp": 0, "max_shield": 0 },
+        "percent": { "attack": 0.0, "spell_power": 0.0 }
+      },
+
+      "granted_skills": ["skill_flame_blade"],
+      "set_name": "dragon_set",
+      "special_tags": ["TAG_ELEMENT_DAMAGE_BONUS_FIRE_10"]
+    }
+  },
+
+  "sets": {
+    "dragon_set": {
+      "name": "드래곤 세트",
+      "pieces": ["dragon_helmet", "dragon_chest", "dragon_legs", "dragon_boots"],
+      "bonuses": [
+        { "pieces": 2, "stats": { "percent": { "max_hp": 0.05 } }, "special_tags": [] },
+        { "pieces": 4, "stats": { "percent": { "all": 0.05 } }, "special_tags": ["TAG_BUFF_DRAGON_POWER"] }
+      ]
+    }
+  }
+}
+```
+
+### 무기 슬롯 검증 룰(필수)
+
+* `weapon_2h` 장착 시 `weapon_1h` 장착 불가
+* `weapon_1h`는 최대 2개
+
+### ring 슬롯
+
+* `config.json.equipment_rules.ring_slots`로 제한(2 또는 4)
+
+---
+
+# 6) specials.json (스페셜 태그 레지스트리)
+
+## 목적
+
+* “스탯/terms만으로 구현이 어려운 특수효과”를 태그로 분리
+* 실행 타이밍(hook) 명시 → 전투 파이프라인에 끼워넣기 쉬움
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "specials": {
+    "TAG_ALWAYS_HIT": {
+      "description": "필중",
+      "hooks": ["pre_accuracy"],
+      "params": {}
+    },
+    "TAG_ELEMENT_DAMAGE_BONUS_FIRE_10": {
+      "description": "화염 속성 피해 +10%",
+      "hooks": ["pre_damage"],
+      "params": { "element": "fire", "mult": 1.1 }
+    },
+    "TAG_BUFF_DRAGON_POWER": {
+      "description": "전투 중 드래곤의 힘 버프 부여",
+      "hooks": ["on_battle_start"],
+      "params": { "duration_turns": 5, "mods": [{ "stat": "attack", "percent": 0.1 }] }
+    }
+  }
+}
+```
+
+## hooks 표준(권장)
+
+* 전투 흐름: `on_battle_start | pre_action | pre_accuracy | pre_damage | pre_shield | post_damage | post_action | on_kill | on_death | on_turn_end`
+* 장비/패시브: `on_equip | on_unequip`
+
+---
+
+# 7) save.json (저장 데이터)
+
+## 구조(스펙)
+
+```json
+{
+  "version": 1,
+  "player": {
+    "name": "…",
+    "level": 12,
+    "xp": 340,
+    "gold": 210,
+    "base_stats": { "max_hp": 80, "max_mp": 30, "attack": 10, "spell_power": 6, "defense": 4, "magic_resist": 3, "speed": 6 },
+    "current": { "hp": 70, "mp": 18, "shield": 0 },
+    "stat_points": 2
+  },
+  "progress": { "chapter": 3, "flags": { "met_npc_x": true } },
+  "inventory": {
+    "consumables": { "hp_potion_s": 3, "antidote": 1 },
+    "equipment": ["iron_sword", "leather_boots"]
+  },
+  "equipped": {
+    "helmet": null, "chest": "leather_armor", "cloak": null, "legs": null, "boots": "leather_boots",
+    "rings": ["ring_ruby", null],
+    "weapons": ["iron_sword", null]
+  },
+  "learned_skills": ["skill_fireball", "skill_heal"]
+}
+```
+
+---
+
+# 8) 로더 검증 규칙 + 에러 메시지 규격(강제)
+
+## 에러 포맷(권장)
+
+* `E####: <file>:<path> - <message> (hint: ...)`
+
+예시:
+
+* `E1001: skills.json:skills.skill_fireball.mp_cost - must be >= 0`
+
+## 필수 검증 목록
+
+### (A) 공통
+
+* `E1000` JSON 파싱 실패
+* `E1001` 필수 필드 누락
+* `E1002` 타입 불일치(숫자 대신 문자열 등)
+* `E1003` enum 값 불일치
+* `E1004` id 중복
+
+### (B) 참조 무결성
+
+* `E2001` enemies가 참조하는 `skill_id`가 skills에 없음
+* `E2002` equipment.granted_skills가 skills에 없음
+* `E2003` consumables.cast_skill.skill_id가 skills에 없음
+* `E2004` sets.pieces의 equip_id가 equipment에 없음
+* `E2005` special_tags가 specials에 없음
+
+### (C) 수치 범위
+
+* `E3001` chance가 0~1 범위 밖
+* `E3002` duration_turns < 1
+* `E3003` base_stats.max_hp <= 0
+* `E3004` growth_per_level에 음수(허용 여부 옵션: 일반적으로 금지)
+
+### (D) 스킬 수식
+
+* `E4001` component.kind 미지원
+* `E4002` damage_type 미지원
+* `E4003` terms.stat 미지원
+* `E4004` components가 비어있는데 category가 attack/heal/shield인 경우(효과 없음)
+
+### (E) 장비 규칙
+
+* `E5001` slot 미지원
+* `E5002` set_name이 있는데 sets에 정의 없음
+* `E5003` bonuses.pieces가 1..N 범위 밖
+* (런타임 검증) `weapon_2h` + `weapon_1h` 동시 착용 시도 → 사용자 메시지 출력(에러코드 없어도 됨)
+
+---
+
+# 9) 최소 예시 세트(“로드 성공” 스모크 테스트용)
+
+## skills.json (최소 1개)
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "skill_fireball": {
+      "name": "파이어볼",
+      "description": "불꽃 구체를 날린다.",
+      "element": "fire",
+      "category": "attack",
+      "target": "enemy",
+      "mp_cost": 8,
+      "components": [
+        { "kind": "damage", "damage_type": "magic",
+          "terms": [ { "stat": "constant", "coef": 12 }, { "stat": "self_spell_power", "coef": 0.8 } ]
+        }
+      ],
+      "status_effects": [ { "status": "burn", "target": "enemy", "chance": 0.25, "duration_turns": 3 } ],
+      "special_tags": []
+    }
+  }
+}
+```
+
+## enemies.json (최소 1개)
+
+```json
+{
+  "version": 1,
+  "enemies": [
+    {
+      "id": "goblin",
+      "name": "고블린",
+      "tier": "minion",
+      "element": "neutral",
+      "base_level": 1,
+      "base_stats": { "max_hp": 20, "max_mp": 0, "attack": 2, "spell_power": 0, "defense": 0, "magic_resist": 0, "speed": 3 },
+      "growth_per_level": { "max_hp": 2.0, "attack": 0.3, "defense": 0.05, "speed": 0.03 },
+      "rewards": { "xp": 5, "gold_from_xp_ratio": 0.8 },
+      "skill_assignment": { "base": [], "by_level": [] }
+    }
+  ]
+}
+```
+
+## consumables.json (최소 1개)
+
+```json
+{
+  "version": 1,
+  "consumables": {
+    "hp_potion_s": {
+      "name": "소형 체력 포션",
+      "description": "체력을 회복한다.",
+      "rarity": "common",
+      "price": 30,
+      "sell_ratio": 0.7,
+      "usable_in_battle": true,
+      "effects": [ { "type": "heal_hp", "flat": 30, "percent_max_hp": 0.2 } ],
+      "special_tags": []
+    }
+  }
+}
+```
+
+## equipment.json (최소 1개)
+
+```json
+{
+  "version": 1,
+  "equipment": {
+    "iron_sword": {
+      "name": "철검",
+      "description": "무난한 한손검.",
+      "rarity": "common",
+      "slot": "weapon_1h",
+      "price": 100,
+      "sell_ratio": 0.7,
+      "unique": false,
+      "stats": { "flat": { "attack": 3 }, "percent": {} },
+      "granted_skills": [],
+      "set_name": null,
+      "special_tags": []
+    }
+  },
+  "sets": {}
+}
+```
+
+# Desia – 챕터 구성 기획서
+
+## 0. 공통 구조 규칙
+
+* 총 **7개 챕터**, 각 챕터는 **12 Act**로 구성
+* **1 Act = 전투 / 상점 / 이벤트 중 1개**
+* **Act 12는 항상 챕터 보스 전투**
+* 레벨 구간은 *대략적 가이드*이며, 실제 밸런싱 과정에서 조정 가능
+
+---
+
+## 1. 세계관 배경 요약
+
+외신과 괴물로 혼돈에 빠진 세계.
+천제 **아이테르**의 승천 이후 질서는 회복되었으나, 마신의 권속과 마왕군은 여전히 잔존한다.
+
+플레이어는 트리얼 왕국 소속 모험가로, 본래 목표는 "적당히 벌고 평생 놀고먹기"였으나,
+세계의 흐름은 점점 플레이어를 중심으로 왜곡되기 시작한다.
+
+---
+
+## Chapter 1. 서부 황야 지대
+
+### ■ 예상 레벨
+
+* Lv 1 ~ 8
+
+### ■ 챕터 컨셉
+
+* 게임 전반 구조를 익히는 **튜토리얼 챕터**
+* 기본 전투, 스탯 개념, 속성·저항의 기초 학습
+* 상태이상은 **정예 몬스터 한정**으로 제한
+
+### ■ 일반 몬스터 설계
+
+* 유형 A: 낮은 공격력 + 독 / 화상 등 상태이상
+* 유형 B: 높은 공격력 + 낮은 체력
+
+**등장 몬스터**
+
+* 고블린 / 좀비 / 스켈레톤 / 슬라임 / 망령 / 매드 프리스트
+
+### ■ 보스 구성
+
+* 중간 보스: **고블린 샤먼**
+
+  * 소환형 + 상태이상 방해 중심
+* 챕터 보스: **고블린 챔피언**
+
+  * 고체력·고공격력 / 낮은 마법 저항
+
+---
+
+## Chapter 2. 몰락한 왕국
+
+### ■ 예상 레벨
+
+* Lv 8 ~ 20
+
+### ■ 챕터 컨셉
+
+* 본격적인 빌드 체크 구간
+* **마법 저항 대비 여부**가 난이도를 크게 좌우
+
+### ■ 등장 몬스터
+
+* 타락한 마도사 / 매드 프리스트 / 도적 / 나이트워커
+* 망령 / 스켈레톤 전사 / 변질된 엘리멘터리
+
+### ■ 보스 구성
+
+* 중간 보스: **스켈레톤 드래곤** 또는 **스톤 골렘**
+
+  * 고방어·고마저 탱커형
+* 챕터 보스: **피의 영혼**
+
+  * 고체력 + 고주문력 지속 압박형
+
+---
+
+## Chapter 3. 숲의 양옥집
+
+### ■ 예상 레벨
+
+* Lv 20 ~ 30
+
+### ■ 챕터 규칙
+
+* 회복 계열 스킬 회복량 **+10%**
+
+### ■ 챕터 컨셉
+
+* 성장 가속 구간
+* 흡혈·회복·지속전 메커니즘 집중
+
+### ■ 등장 몬스터
+
+* 흡혈귀 / 뱀파이어
+* 강화·거대 슬라임
+* 고레벨 변질 엘리멘터리
+* 매드 프리스트 / 타락한 마도사
+
+### ■ 보스 구성
+
+* 중간 보스: **데스 나이트**
+* 챕터 보스: **뱀파이어 로드**
+
+---
+
+## Chapter 4. 전설의 유산
+
+### ■ 예상 레벨
+
+* Lv 30 ~ 55
+
+### ■ 챕터 컨셉
+
+* 다음 고난도 구간을 대비하는 **빌드 확정 챕터**
+* 전설 장비 + 신화 아티팩트 획득
+* 사실상의 **전직 시스템 역할**
+
+### ■ 등장 몬스터
+
+* 수호 영룡 / 드래곤 시리즈
+* 가디언 슬라임 / 갓 슬라임 (엘리트)
+* 고레벨 슬라임 / 나이트워커 / 와이번
+* 스톤 골렘 / 나가
+
+### ■ 보스 구성
+
+* 중간 보스: **레드 드래곤**
+* 챕터 보스: **에인션트 드래곤**
+* 히든 보스: **이차원 파수기 듀자**
+
+  * 챕터 6급 몬스터를 조기 배치한 파워 인플레이션 연출
+
+---
+
+## Chapter 5. 둠 이터널
+
+### ■ 예상 레벨
+
+* Lv 55 ~ 80
+
+### ■ 챕터 규칙
+
+* 화속성 피해 +10%
+* 수속성 피해 +20%
+* 수속성 스킬 MP 소모 +20%
+* 화상 지속시간 +2턴
+
+### ■ 챕터 컨셉
+
+* 최고 성장률 + 최고 난이도 상승 구간
+* **화상 중심 지옥 메타**
+
+### ■ 등장 몬스터
+
+* 지옥의 변견 / 케르베로스
+* 고레벨 화염 정령 / 망령 / 스켈레톤
+* 피의 영혼 / 이차원정령 비잠
+
+### ■ 보스 구성
+
+* 중간 보스: **헬 드래곤**
+* 챕터 보스: **사천왕 아스모데우스**
+
+---
+
+## Chapter 6. 이계의 침략자
+
+### ■ 예상 레벨
+
+* Lv 80 ~ 90
+
+### ■ 챕터 규칙
+
+* 마나 소모 +15%
+* 스킬 피해량 +30%
+
+### ■ 챕터 컨셉
+
+* 양날의 검 챕터
+* 빠른 승부 = 빠른 사망
+* 대부분의 적이 상태이상 보유 (특히 패닉)
+
+### ■ 등장 몬스터
+
+* 이차원 시리즈
+* 암흑차원신 **크림즌 노바**
+
+### ■ 보스 구성
+
+* 중간 보스: **사천왕 아몬**
+* 챕터 보스: **크림즌 노바 트리니티**
+
+  * 물리·마법·복합 전천후 보스
+
+---
+
+## Chapter 7. 인마대전
+
+### ■ 예상 레벨
+
+* Lv 90 ~ 100
+
+### ■ 챕터 컨셉
+
+* 최종장
+* 잡몹 없음, 전원 보스급 개체
+
+### ■ 등장 몬스터
+
+* 종말의 선구자 / 핏빛 갈퀴
+* 플레시 콜로서스 / 피의 영혼
+* 이차원수 다크 가넥스 / 이차원제 게이라 가일
+* 고레벨 뱀파이어 / 스켈레톤 / 타락한 마도사
+
+### ■ 보스 구성
+
+* 중간 보스: **사천왕 듀란**, **사천왕 콘빅트**
+* 챕터 보스: **마왕 앨리스**
+* 진 최종 보스: **슈미트**
+
+  * 체력 33% 이후 즉사 연출기 *저스티스 오브 아이테르*로 클리어
+
