@@ -33,9 +33,9 @@ public class Game {
                     rk.printRanking();
                     loopNew = false; break;
                 case 4:
-                    System.out.println("게임을 종료하시겠습니까?\n(Y: 1 / N: 0)");
+                    System.out.println("게임을 종료하시겠습니까?\n(Y: 1 / N: 2)");
                     input = io1.readInt(">>>",2);
-                    if(input == 1)
+                    if(input == 2)
                         loopNew = false;
                     break;
                 default:
@@ -51,8 +51,9 @@ public class Game {
         System.out.println("2. 마법사\n체력은 약하지만 강력하고 파괴적인 마법을 구사한다.");
         System.out.println("3. 암살자\n그림자 속에서 누구보다 빠른 속도로 적을 제압한다.");
         System.out.println("4. 마검사\n검술 시험에서도, 마도사 시험에서도 떨어진 비운의 전사. 그러나 엄청난 잠재력을 지녔다.");
+        System.out.println("(뒤로가기는 5 입력)");
 
-        int input = io1.readInt(">>>",3);
+        int input = io1.readInt(">>>",5);
 
         switch(input){
             case 1:

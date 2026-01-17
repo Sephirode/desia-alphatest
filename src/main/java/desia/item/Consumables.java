@@ -6,7 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @AllArgsConstructor //자동 생성자
-@NoArgsConstructor  //defalut 생성자
+@NoArgsConstructor  //default 생성자
 @Builder            //객체를 생성하기 위한 다른 방법. 변수 순서를 섞어도 가능하게 함.
 @Getter
 
