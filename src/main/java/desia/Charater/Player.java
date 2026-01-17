@@ -10,6 +10,7 @@ import lombok.NoArgsConstructor;
 @Builder            //객체를 생성하기 위한 다른 방법. 변수 순서를 섞어도 가능하게 함.
 @Getter
 public class Player {
+    private String id;
     private String playerName;
     private double maxHp;
     private double maxMp;
